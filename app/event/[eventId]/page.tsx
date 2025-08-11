@@ -128,7 +128,6 @@ export default async function EventDetailPage({
         </div>
         <Badge variant="outline">{eventDetails.phases.length} Phases</Badge>
       </div>
-
       <div className="grid gap-6">
         <Card>
           <CardHeader>
@@ -172,7 +171,6 @@ export default async function EventDetailPage({
             </div>
           </CardContent>
         </Card>
-
         {eventDetails.phases.length === 0 && (
           <Card>
             <CardContent className="pt-6">
