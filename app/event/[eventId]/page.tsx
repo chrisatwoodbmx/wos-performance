@@ -172,7 +172,6 @@ export default async function EventDetailPage({
             </div>
           </CardContent>
         </Card>
-
         {eventDetails.phases.length === 0 && (
           <Card>
             <CardContent className="pt-6">
