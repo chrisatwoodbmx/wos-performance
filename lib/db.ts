@@ -1,22 +1,29 @@
-import { neon } from "@neondatabase/serverless"
+import { neon } from "@neondatabase/serverless";
+import bcrypt from "bcryptjs";
 
 // Ensure DATABASE_URL is set in your environment variables (e.g., .env.local)
-const databaseUrl = process.env.DATABASE_URL
+const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  throw new Error("DATABASE_URL is not set. Please set it in your environment variables.")
+  throw new Error(
+    "DATABASE_URL is not set. Please set it in your environment variables.",
+  );
 }
 
-export const sql = neon(databaseUrl)
+export const sql = neon(databaseUrl);
 
-// For basic password hashing (DO NOT USE IN PRODUCTION - use bcrypt)
 export async function hashPassword(password: string): Promise<string> {
-  // In a real application, use a robust hashing library like bcrypt
-  // For this example, we'll just return the password as hash for simplicity
-  return password
+  const saltRounds = 12;
+  return await bcrypt.hash(password, saltRounds);
 }
 
-export async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
-  // In a real application, use a robust hashing library like bcrypt
-  return password === hashedPassword
+export async function verifyPassword(
+  password: string,
+  hashedPassword: string,
+): Promise<boolean> {
+  return await bcrypt.compare(password, hashedPassword);
+}
+
+export function generateSessionToken(): string {
+  return crypto.randomUUID() + crypto.randomUUID().replace(/-/g, "");
 }
