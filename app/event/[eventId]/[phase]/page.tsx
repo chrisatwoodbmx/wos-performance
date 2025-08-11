@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { UploadModal } from "@/components/upload-modal";
-import { Suspense, useMemo } from "react";
+import { Suspense } from "react";
 
 type DailyStat = {
   id: string;
@@ -29,6 +29,7 @@ type DailyStat = {
   playerRank: number | null;
   furnaceLevel: number | null;
   worldRankPlacement: number | null;
+  points: number | null;
   recordedAt: Date;
   previousDayPower: number | null;
   prepDayPower: number | null;
@@ -44,29 +45,36 @@ async function getPhaseData(
   phaseId: string;
   alliances: any[];
 } | null> {
-  // Get event details
   const eventResult = await sql`SELECT name FROM events WHERE id = ${eventId}`;
   if (eventResult.length === 0) return null;
   const eventName = eventResult[0].name;
 
-  // Get phase details by name
   const phaseResult = await sql`
     SELECT id, name, phase_order
     FROM event_phases
-    WHERE event_id = ${eventId} AND LOWER(REPLACE(name, ' ', '-')) = ${phaseName.toLowerCase()}
+    WHERE event_id = ${eventId} AND LOWER(REGEXP_REPLACE(name, '\\s+', '-', 'g')) = ${phaseName.toLowerCase()}
   `;
-  if (phaseResult.length === 0) return null;
-  const phase = phaseResult[0];
 
-  // Get all phases for this event to calculate deltas
+  let phase: any;
+  if (phaseResult.length === 0) {
+    const fallbackResult = await sql`
+      SELECT id, name, phase_order
+      FROM event_phases
+      WHERE event_id = ${eventId} AND LOWER(REPLACE(name, ' ', '-')) = ${phaseName.toLowerCase()}
+    `;
+    if (fallbackResult.length === 0) return null;
+    phase = fallbackResult[0];
+  } else {
+    phase = phaseResult[0];
+  }
+
   const phases = await sql`
     SELECT id, name, phase_order FROM event_phases WHERE event_id = ${eventId} ORDER BY phase_order
   `;
 
-  // Fetch all stats for the event to calculate deltas
   const allStats = await sql`
-    SELECT
-      dps.player_id,
+    SELECT DISTINCT
+      COALESCE(a1.main, a2.main, p.id) as player_id,
       p.current_name,
       dps.power,
       ep.phase_order,
@@ -74,7 +82,11 @@ async function getPhaseData(
     FROM daily_player_stats dps
     JOIN players p ON dps.player_id = p.id
     JOIN event_phases ep ON dps.event_phase_id = ep.id
+    LEFT JOIN aliases a1 ON p.id = a1.alt
+    LEFT JOIN aliases a2 ON p.id = a2.main
+    LEFT JOIN player_name_history pnh ON p.id = pnh.player_id
     WHERE ep.event_id = ${eventId}
+    ORDER BY p.current_name, ep.phase_order
   `;
 
   const mappedAllStats = allStats.map((stat) => ({
@@ -85,20 +97,18 @@ async function getPhaseData(
     phaseName: stat.name,
   }));
 
-  // Map for quick lookup of player's power at different phases
-  const playerPowerMap = new Map<string, Map<number, number>>(); // playerId -> (phaseOrder -> power)
+  const playerPowerMap = new Map<string, Map<number, number>>();
   for (const stat of mappedAllStats) {
-    if (!playerPowerMap.has(stat.playerId)) {
-      playerPowerMap.set(stat.playerId, new Map());
+    if (!playerPowerMap.has(stat.playerName)) {
+      playerPowerMap.set(stat.playerName, new Map());
     }
-    playerPowerMap.get(stat.playerId)?.set(stat.phaseOrder, stat.power);
+    playerPowerMap.get(stat.playerName)?.set(stat.phaseOrder, stat.power);
   }
 
-  // Fetch current phase stats
   const currentPhaseStats = await sql`
-    SELECT
+    SELECT DISTINCT
       dps.id,
-      dps.player_id,
+      COALESCE(a1.main, a2.main, p.id) as player_id,
       p.current_name,
       p.alliance_id,
       a.name as alliance_name,
@@ -108,10 +118,14 @@ async function getPhaseData(
       dps.player_rank,
       dps.furnace_level,
       dps.world_rank_placement,
+      dps.points,
       dps.recorded_at
     FROM daily_player_stats dps
     JOIN players p ON dps.player_id = p.id
     LEFT JOIN alliances a ON p.alliance_id = a.id
+    LEFT JOIN aliases a1 ON p.id = a1.alt
+    LEFT JOIN aliases a2 ON p.id = a2.main
+    LEFT JOIN player_name_history pnh ON p.id = pnh.player_id
     WHERE dps.event_phase_id = ${phase.id}
     ORDER BY dps.power DESC
   `;
@@ -128,22 +142,21 @@ async function getPhaseData(
     playerRank: stat.player_rank,
     furnaceLevel: stat.furnace_level,
     worldRankPlacement: stat.world_rank_placement,
+    points: stat.points,
     recordedAt: stat.recorded_at,
   }));
 
   const statsWithDeltas = mappedCurrentPhaseStats.map((stat) => {
-    const playerPowers = playerPowerMap.get(stat.playerId);
+    const playerPowers = playerPowerMap.get(stat.playerName);
     let previousDayPower: number | null = null;
     let prepDayPower: number | null = null;
 
     if (playerPowers) {
-      // Get previous day's power
       const prevPhaseOrder = phase.phase_order - 1;
       if (prevPhaseOrder >= 0) {
         previousDayPower = playerPowers.get(prevPhaseOrder) || null;
       }
-      // Get Prep Day power
-      prepDayPower = playerPowers.get(0) || null; // Prep Day is phase_order 0
+      prepDayPower = playerPowers.get(0) || null;
     }
 
     return {
@@ -160,7 +173,6 @@ async function getPhaseData(
     WHERE ea.event_id = ${eventId}
   `;
 
-  // If no alliances are linked to this event, get all alliances
   const alliances =
     alliancesResult.length > 0
       ? alliancesResult
@@ -219,9 +231,7 @@ export default async function PhaseDetailPage({
     const diff = current - reference;
     return `${((diff / reference) * 100).toFixed(2)}%`;
   };
-
   const totalPower = stats.reduce((sum, s) => sum + parseInt(s.power, 10), 0);
-
   return (
     <div className="container mx-auto p-4 md:p-8">
       <div className="flex items-center gap-4 mb-6">
@@ -325,6 +335,7 @@ export default async function PhaseDetailPage({
                   <TableHead>Player Rank</TableHead>
                   <TableHead>Furnace Level</TableHead>
                   <TableHead>World Ranking</TableHead>
+                  <TableHead>Points</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -410,11 +421,16 @@ export default async function PhaseDetailPage({
                           "N/A"
                         )}
                       </TableCell>
+                      <TableCell>
+                        {stat.points
+                          ? Intl.NumberFormat().format(stat.points)
+                          : "N/A"}
+                      </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={9} className="h-24 text-center">
+                    <TableCell colSpan={10} className="h-24 text-center">
                       No data for this phase. Upload a CSV to get started!
                     </TableCell>
                   </TableRow>

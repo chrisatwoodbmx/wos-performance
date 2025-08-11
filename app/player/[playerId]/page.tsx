@@ -63,21 +63,28 @@ async function getPlayerData(playerId: string) {
 
   // Get all events and phases the player participated in
   const eventData = await sql`
-    SELECT DISTINCT
-      e.id as event_id,
-      e.name as event_name,
-      e.start_date
-    FROM events e
-    JOIN event_phases ep ON e.id = ep.event_id
-    JOIN daily_player_stats dps ON ep.id = dps.event_phase_id
-    WHERE dps.player_id = ${playerId}
-    ORDER BY e.start_date DESC
+  SELECT DISTINCT
+    e.id as event_id,
+    e.name as event_name,
+    e.start_date
+
+FROM events e
+JOIN event_phases ep ON e.id = ep.event_id
+JOIN daily_player_stats dps ON ep.id = dps.event_phase_id
+WHERE dps.player_id =  ${playerId}
+   OR dps.player_id IN (
+       SELECT alt FROM aliases WHERE main =  ${playerId}
+       UNION
+       SELECT main FROM aliases WHERE alt =  ${playerId}
+   )
+ORDER BY e.start_date DESC
   `;
 
   // For each event, get all phase data
   const playerEventData: PlayerEventData[] = [];
 
   for (const event of eventData) {
+    console.log(`Fetching phases for event: ${event.event_id}`);
     const phases = await sql`
       SELECT
         ep.id as phase_id,
@@ -89,10 +96,18 @@ async function getPlayerData(playerId: string) {
         dps.furnace_level,
         dps.world_rank_placement
       FROM event_phases ep
-      LEFT JOIN daily_player_stats dps ON ep.id = dps.event_phase_id AND dps.player_id = ${playerId}
+      LEFT JOIN daily_player_stats dps ON ep.id = dps.event_phase_id
+      AND (dps.player_id = ${playerId}
+           OR dps.player_id IN (
+               SELECT alt FROM aliases WHERE main =${playerId}
+               UNION
+               SELECT main FROM aliases WHERE alt = ${playerId}
+           ))
       WHERE ep.event_id = ${event.event_id}
       ORDER BY ep.phase_order
     `;
+
+    console.log(`Found ${phases.length} phases for event: ${event.event_id}`);
 
     playerEventData.push({
       eventId: event.event_id,
@@ -122,7 +137,8 @@ export default async function PlayerProfilePage({
 }: {
   params: { playerId: string };
 }) {
-  const data = await getPlayerData(params.playerId);
+  const id = await params.playerId;
+  const data = await getPlayerData(id);
 
   if (!data) {
     notFound();
@@ -269,12 +285,10 @@ export default async function PlayerProfilePage({
       </Card>
 
       {/* Detailed Stats for Latest Event */}
-      {eventData.length > 0 && (
-        <Card className="mt-6">
+      {eventData.map((event) => (
+        <Card className="mt-6" key={event.eventId}>
           <CardHeader>
-            <CardTitle>
-              Latest Event Details - {eventData[0].eventName}
-            </CardTitle>
+            <CardTitle>{event.eventName}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -290,7 +304,7 @@ export default async function PlayerProfilePage({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {eventData[0].phases.map((phase) => (
+                  {event.phases.map((phase) => (
                     <TableRow key={phase.phaseId}>
                       <TableCell className="font-medium">
                         {phase.phaseName}
@@ -319,7 +333,7 @@ export default async function PlayerProfilePage({
             </div>
           </CardContent>
         </Card>
-      )}
+      ))}
     </div>
   );
 }
